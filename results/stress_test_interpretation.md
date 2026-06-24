@@ -4,16 +4,16 @@ Stress tests use the existing simulator with config-level shocks. They are synth
 
 ## Tail-Risk Robustness
 
-Across non-base stress scenarios, `Neural Policy` has the lowest average CVaR 95 at `200.27` bps.
+Across non-base stress scenarios, `Almgren-Chriss` has the lowest average CVaR 95 at `211.80` bps.
 
 ## Neural Policy
 
-Neural Policy has the lowest tail risk in liquidity_drought, volatility_spike, slow_transient_decay, late_day_liquidity_collapse, impact_misspecification.
+Neural Policy has the lowest tail risk in none of the stress scenarios. Classical policies have lower CVaR in liquidity_drought, volatility_spike, slow_transient_decay, late_day_liquidity_collapse, impact_misspecification.
 
 ## Classical Baselines
 
-Among classical policies, the lowest-CVaR policy by stress scenario is: impact_misspecification: Recalibrated AC, late_day_liquidity_collapse: VWAP, liquidity_drought: Recalibrated AC, slow_transient_decay: Recalibrated AC, volatility_spike: Recalibrated AC.
+Among classical policies, the lowest-CVaR policy by stress scenario is: impact_misspecification: TWAP, late_day_liquidity_collapse: TWAP, liquidity_drought: TWAP, slow_transient_decay: TWAP, volatility_spike: TWAP.
 
 ## Liquidity Stress And Completion
 
-No policy failed to complete the parent order in these scenarios. Participation-limit pressure appears in: liquidity_drought/VWAP, liquidity_drought/Almgren-Chriss, liquidity_drought/Neural Policy, late_day_liquidity_collapse/TWAP, late_day_liquidity_collapse/Almgren-Chriss, late_day_liquidity_collapse/Recalibrated AC.
+No policy failed to complete the parent order in these scenarios. Participation-limit pressure appears in: base/TWAP, base/VWAP, base/Almgren-Chriss, base/Recalibrated AC, base/Neural Policy, liquidity_drought/TWAP, liquidity_drought/VWAP, liquidity_drought/Almgren-Chriss, liquidity_drought/Recalibrated AC, liquidity_drought/Neural Policy, volatility_spike/TWAP, volatility_spike/VWAP, volatility_spike/Almgren-Chriss, volatility_spike/Recalibrated AC, volatility_spike/Neural Policy, slow_transient_decay/TWAP, slow_transient_decay/VWAP, slow_transient_decay/Almgren-Chriss, slow_transient_decay/Recalibrated AC, slow_transient_decay/Neural Policy, late_day_liquidity_collapse/TWAP, late_day_liquidity_collapse/VWAP, late_day_liquidity_collapse/Almgren-Chriss, late_day_liquidity_collapse/Recalibrated AC, late_day_liquidity_collapse/Neural Policy, impact_misspecification/TWAP, impact_misspecification/VWAP, impact_misspecification/Almgren-Chriss, impact_misspecification/Recalibrated AC, impact_misspecification/Neural Policy.

@@ -1,0 +1,39 @@
+environment:
+  parent_order: 100000.0
+  n_steps: 40
+  horizon: 1.0
+  initial_price: 100.0
+  base_volatility: 0.02
+  volatility_noise: 0.20
+  base_daily_volume: 5000000.0
+  volume_noise: 0.30
+  participation_rate: 0.10
+  temp_impact: 0.00000020
+  permanent_impact: 0.00000002
+  transient_decay: 0.85
+  transient_strength: 0.00000010
+  transient_noise: 0.0
+  terminal_liquidation: true
+  clip_actions: true
+  side: sell
+
+evaluation:
+  n_episodes: 250
+  seed: 7
+  cvar_level: 0.95
+
+training:
+  seed: 7
+  batch_size: 64
+  epochs: 25
+  learning_rate: 0.001
+  hidden_sizes: [64, 64]
+  lambda_var: 0.50
+  alpha_cvar: 0.00
+  beta_terminal: 10.0
+  cvar_level: 0.95
+  grad_clip_norm: 1.0
+  device: cpu
+
+almgren_chriss:
+  risk_aversion: 0.0005

@@ -27,7 +27,9 @@ import matplotlib.pyplot as plt
 from neural_optimal_execution.config import EvaluationConfig, ExecutionConfig, load_project_config
 from neural_optimal_execution.environment import ExecutionEnv
 from neural_optimal_execution.environment.market_simulator import u_shaped_curve
+from neural_optimal_execution.evaluation.feasibility import ensure_participation_feasible
 from neural_optimal_execution.evaluation.metrics import cvar
+from neural_optimal_execution.evaluation.outputs import display_path, make_run_output_dirs
 from neural_optimal_execution.evaluation.stress_tests import liquidity_drought, slow_resilience, volatility_spike
 from neural_optimal_execution.policies import (
     AlmgrenChrissPolicy,
@@ -53,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run execution-policy stress tests.")
     parser.add_argument("--config", default="configs/default.yaml", help="Path to YAML config.")
     parser.add_argument("--output-dir", default="results", help="Directory for result artifacts.")
+    parser.add_argument("--run-name", default=None, help="Optional run name under results/runs/<run-name>.")
+    parser.add_argument("--allow-infeasible", action="store_true", help="Continue even if participation capacity is infeasible.")
     return parser.parse_args()
 
 
@@ -129,9 +133,11 @@ def summarize_evaluation(
     losses: np.ndarray,
     terminal_inventory: np.ndarray,
     violations: np.ndarray,
+    forced_terminal_liquidation: np.ndarray | None = None,
 ) -> dict[str, float | str]:
     """Build one stress-test metrics row."""
 
+    forced = forced_terminal_liquidation if forced_terminal_liquidation is not None else np.zeros_like(violations)
     return {
         "scenario": scenario,
         "policy": policy_name,
@@ -143,6 +149,7 @@ def summarize_evaluation(
         "completion_rate": float(np.mean(np.isclose(terminal_inventory, 0.0, atol=1e-6))),
         "avg_terminal_inventory": float(terminal_inventory.mean()),
         "avg_participation_violation_shares": float(violations.mean()),
+        "forced_terminal_liquidation_shares": float(forced.mean()),
     }
 
 
@@ -164,7 +171,18 @@ def evaluate_policy_for_scenario(
         [episode.history["participation_violation"].sum() for episode in episodes],
         dtype=float,
     )
-    return summarize_evaluation(scenario, policy.name, losses, terminal_inventory, violations)
+    forced_terminal_liquidation = np.asarray(
+        [episode.history["forced_terminal_liquidation"].sum() for episode in episodes],
+        dtype=float,
+    )
+    return summarize_evaluation(
+        scenario,
+        policy.name,
+        losses,
+        terminal_inventory,
+        violations,
+        forced_terminal_liquidation,
+    )
 
 
 def plot_stress_metric(
@@ -275,41 +293,56 @@ Among classical policies, the lowest-CVaR policy by stress scenario is: {classic
 def main() -> None:
     args = parse_args()
     env_config, eval_config, _train_config, ac_config = load_project_config(resolve_path(args.config))
-    output_dir = resolve_path(args.output_dir)
-    model_path = output_dir / "models" / "neural_policy.pt"
+    scenario_configs = build_scenarios(env_config)
+    all_feasible = True
+    for scenario_name, scenario_config in scenario_configs.items():
+        all_feasible = (
+            ensure_participation_feasible(
+                scenario_config,
+                label=f"{args.config}:{scenario_name}",
+                allow_infeasible=args.allow_infeasible,
+            )
+            and all_feasible
+        )
+    if not all_feasible:
+        raise SystemExit(1)
+    output_dirs = make_run_output_dirs(resolve_path(args.output_dir), args.run_name)
+    output_dir = output_dirs.root
+    model_path = output_dirs.models / "neural_policy.pt"
+    if args.run_name:
+        print(f"Using run output directory: {display_path(output_dir, ROOT)}")
 
     if not model_path.exists():
-        print(f"Skipping Neural Policy because no saved model exists at {model_path.relative_to(ROOT)}.")
+        print(f"Skipping Neural Policy because no saved model exists at {display_path(model_path, ROOT)}.")
 
     rows: list[dict[str, float | str]] = []
-    for scenario_name, scenario_config in build_scenarios(env_config).items():
+    for scenario_name, scenario_config in scenario_configs.items():
         for policy in build_policies(ac_config.risk_aversion, model_path):
             print(f"Scenario {scenario_name}: evaluating {policy.name}...")
             rows.append(evaluate_policy_for_scenario(scenario_name, policy, scenario_config, eval_config))
 
     metrics = pd.DataFrame(rows)
-    table_path = output_dir / "tables" / "stress_test_metrics.csv"
-    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table_path = output_dirs.tables / "stress_test_metrics.csv"
     metrics.to_csv(table_path, index=False)
 
     plot_stress_metric(
         metrics,
         "cvar_95_bps",
-        output_dir / "figures" / "stress_test_cvar.png",
+        output_dirs.figures / "stress_test_cvar.png",
         ylabel="CVaR 95 implementation shortfall (bps)",
         title="Stress-test CVaR by policy",
     )
     plot_stress_metric(
         metrics,
         "mean_shortfall_bps",
-        output_dir / "figures" / "stress_test_mean_shortfall.png",
+        output_dirs.figures / "stress_test_mean_shortfall.png",
         ylabel="Mean implementation shortfall (bps)",
         title="Stress-test mean shortfall by policy",
     )
     plot_stress_metric(
         metrics,
         "worst_shortfall_bps",
-        output_dir / "figures" / "stress_test_worst_shortfall.png",
+        output_dirs.figures / "stress_test_worst_shortfall.png",
         ylabel="Worst implementation shortfall (bps)",
         title="Stress-test worst shortfall by policy",
     )
@@ -318,9 +351,9 @@ def main() -> None:
 
     print("\nStress-test summary:")
     print(metrics.to_string(index=False))
-    print(f"\nSaved table to {table_path.relative_to(ROOT)}")
-    print(f"Saved figures to {(output_dir / 'figures').relative_to(ROOT)}")
-    print(f"Saved interpretation to {interpretation_path.relative_to(ROOT)}")
+    print(f"\nSaved table to {display_path(table_path, ROOT)}")
+    print(f"Saved figures to {display_path(output_dirs.figures, ROOT)}")
+    print(f"Saved interpretation to {display_path(interpretation_path, ROOT)}")
 
 
 if __name__ == "__main__":
