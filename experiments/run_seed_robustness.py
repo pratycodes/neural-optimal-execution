@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -26,11 +27,12 @@ import matplotlib.pyplot as plt
 from neural_optimal_execution.config import EvaluationConfig, ExecutionConfig, load_project_config
 from neural_optimal_execution.environment import ExecutionEnv
 from neural_optimal_execution.evaluation.feasibility import ensure_participation_feasible
-from neural_optimal_execution.evaluation.metrics import cvar
+from neural_optimal_execution.evaluation.metrics import completion_rate, constraint_summary_metrics, cvar
 from neural_optimal_execution.evaluation.outputs import display_path, make_run_output_dirs
 from neural_optimal_execution.policies import (
     AlmgrenChrissPolicy,
     BasePolicy,
+    ConstantParticipationPolicy,
     RecalibratedAlmgrenChrissPolicy,
     TWAPPolicy,
     TrainedNeuralPolicy,
@@ -49,6 +51,9 @@ METRICS = (
     "avg_terminal_inventory",
     "avg_participation_violation_shares",
     "forced_terminal_liquidation_shares",
+    "terminal_inventory_fraction",
+    "forced_terminal_liquidation_fraction",
+    "participation_violation_fraction_of_parent_order",
 )
 
 
@@ -58,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="results", help="Directory for result artifacts.")
     parser.add_argument("--run-name", default=None, help="Optional run name under results/runs/<run-name>.")
     parser.add_argument("--allow-infeasible", action="store_true", help="Continue even if participation capacity is infeasible.")
+    parser.add_argument("--strict-constraints", action="store_true", help="Disable terminal-forced liquidation and enforce participation clipping.")
     return parser.parse_args()
 
 
@@ -67,6 +73,7 @@ def build_policies(ac_risk_aversion: float, model_path: Path) -> list[BasePolicy
     policies: list[BasePolicy] = [
         TWAPPolicy(),
         VWAPPolicy(),
+        ConstantParticipationPolicy(),
         AlmgrenChrissPolicy(risk_aversion=ac_risk_aversion),
         RecalibratedAlmgrenChrissPolicy(risk_aversion=ac_risk_aversion),
     ]
@@ -84,10 +91,13 @@ def summarize_seed(
     terminal_inventory: np.ndarray,
     violations: np.ndarray,
     forced_terminal_liquidation: np.ndarray | None = None,
+    parent_order: float = 1.0,
+    completion_tolerance_fraction: float = 1.0e-6,
 ) -> dict[str, float | int | str]:
     """Summarize one policy's evaluation for one seed."""
 
     forced = forced_terminal_liquidation if forced_terminal_liquidation is not None else np.zeros_like(violations)
+    constraint_metrics = constraint_summary_metrics(terminal_inventory, violations, forced, parent_order)
     return {
         "seed": seed,
         "policy": policy_name,
@@ -96,10 +106,12 @@ def summarize_seed(
         "cvar_95_bps": cvar(losses, 0.95),
         "p99_shortfall_bps": float(np.quantile(losses, 0.99)),
         "worst_shortfall_bps": float(losses.max()),
-        "completion_rate": float(np.mean(np.isclose(terminal_inventory, 0.0, atol=1e-6))),
-        "avg_terminal_inventory": float(terminal_inventory.mean()),
-        "avg_participation_violation_shares": float(violations.mean()),
-        "forced_terminal_liquidation_shares": float(forced.mean()),
+        "completion_rate": completion_rate(
+            terminal_inventory,
+            parent_order,
+            completion_tolerance_fraction,
+        ),
+        **constraint_metrics,
     }
 
 
@@ -176,6 +188,8 @@ def evaluate_for_seed(
                 terminal_inventory,
                 violations,
                 forced_terminal_liquidation,
+                env_cfg.parent_order,
+                eval_cfg.completion_tolerance_fraction,
             )
         )
     return rows
@@ -184,6 +198,8 @@ def evaluate_for_seed(
 def main() -> None:
     args = parse_args()
     env_cfg, eval_cfg, _train_cfg, ac_cfg = load_project_config(ROOT / args.config)
+    if args.strict_constraints:
+        env_cfg = replace(env_cfg, terminal_liquidation=False, clip_actions=True)
     if not ensure_participation_feasible(env_cfg, label=args.config, allow_infeasible=args.allow_infeasible):
         raise SystemExit(1)
     output_dirs = make_run_output_dirs(ROOT / args.output_dir, args.run_name)
@@ -191,6 +207,8 @@ def main() -> None:
     model_path = output_dirs.models / "neural_policy.pt"
     if args.run_name:
         print(f"Using run output directory: {display_path(output_dir, ROOT)}")
+    if args.strict_constraints:
+        print("Strict constraints enabled: terminal-forced liquidation is disabled.")
 
     if not model_path.exists():
         print(f"Skipping Neural Policy because no saved model exists at {display_path(model_path, ROOT)}.")

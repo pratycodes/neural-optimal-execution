@@ -23,7 +23,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(XDG_CACHE_DIR))
 import matplotlib.pyplot as plt
 
 from neural_optimal_execution.config import load_project_config
-from neural_optimal_execution.evaluation.metrics import PolicyEvaluation, cvar, evaluate_policy
+from neural_optimal_execution.evaluation.metrics import PolicyEvaluation, completion_rate, cvar, evaluate_policy
 from neural_optimal_execution.policies import AlmgrenChrissPolicy
 
 RISK_AVERSION_GRID = (0.0, 1.25e-4, 5.0e-4, 2.0e-3, 8.0e-3)
@@ -76,6 +76,7 @@ def summarize_ac_sanity(
     risk_aversion: float,
     evaluation: PolicyEvaluation,
     parent_order: float,
+    completion_tolerance_fraction: float,
 ) -> dict[str, float]:
     """Build one CSV row for an AC sanity-check evaluation."""
 
@@ -86,7 +87,11 @@ def summarize_ac_sanity(
         "mean_shortfall": float(shortfalls.mean()),
         "std_shortfall": float(shortfalls.std(ddof=1)) if shortfalls.size > 1 else 0.0,
         "cvar_95": cvar(shortfalls, 0.95),
-        "completion_rate": float(np.mean(np.isclose(terminal_inventory, 0.0, atol=1e-6))),
+        "completion_rate": completion_rate(
+            terminal_inventory,
+            parent_order,
+            completion_tolerance_fraction,
+        ),
         "avg_first_half_liquidation_fraction": average_first_half_liquidation_fraction(evaluation, parent_order),
     }
 
@@ -141,7 +146,14 @@ def main() -> None:
         print(f"Evaluating Almgren-Chriss with risk_aversion={risk_aversion:.6g}...")
         evaluation = evaluate_policy(policy, env_cfg, eval_cfg)
         evaluations.append((risk_aversion, evaluation))
-        rows.append(summarize_ac_sanity(risk_aversion, evaluation, env_cfg.parent_order))
+        rows.append(
+            summarize_ac_sanity(
+                risk_aversion,
+                evaluation,
+                env_cfg.parent_order,
+                eval_cfg.completion_tolerance_fraction,
+            )
+        )
 
     summary = pd.DataFrame(rows)
     table_path = output_dir / "tables" / "ac_sanity_check.csv"

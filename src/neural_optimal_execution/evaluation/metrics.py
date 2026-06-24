@@ -40,6 +40,17 @@ def cvar(values: np.ndarray, level: float = 0.95) -> float:
     return float(tail.mean())
 
 
+def completion_rate(
+    terminal_inventory: np.ndarray,
+    parent_order: float,
+    tolerance_fraction: float = 1.0e-6,
+) -> float:
+    """Return the fraction of episodes completed within an economic share tolerance."""
+
+    tolerance_shares = max(1.0e-6, max(float(parent_order), 0.0) * max(float(tolerance_fraction), 0.0))
+    return float(np.mean(np.abs(terminal_inventory) <= tolerance_shares))
+
+
 def evaluate_policy(
     policy: BasePolicy,
     env_config: ExecutionConfig,
@@ -56,7 +67,37 @@ def evaluate_policy(
     return PolicyEvaluation(policy_name=policy.name, episodes=episodes)
 
 
-def summarize_results(evaluations: list[PolicyEvaluation], cvar_level: float = 0.95) -> pd.DataFrame:
+def infer_parent_order(episode: EpisodeResult) -> float:
+    """Infer the initial parent order from one completed episode history."""
+
+    traded = episode.history.get("trade_size", np.asarray([], dtype=float))
+    return float(np.sum(traded) + episode.terminal_inventory)
+
+
+def constraint_summary_metrics(
+    terminal_inventory: np.ndarray,
+    participation_violations: np.ndarray,
+    forced_terminal_liquidation: np.ndarray,
+    parent_order: float,
+) -> dict[str, float]:
+    """Summarize share-level and parent-order-fraction constraint metrics."""
+
+    denominator = max(float(parent_order), 1e-12)
+    return {
+        "avg_terminal_inventory": float(terminal_inventory.mean()),
+        "avg_participation_violation_shares": float(participation_violations.mean()),
+        "forced_terminal_liquidation_shares": float(forced_terminal_liquidation.mean()),
+        "terminal_inventory_fraction": float((terminal_inventory / denominator).mean()),
+        "forced_terminal_liquidation_fraction": float((forced_terminal_liquidation / denominator).mean()),
+        "participation_violation_fraction_of_parent_order": float((participation_violations / denominator).mean()),
+    }
+
+
+def summarize_results(
+    evaluations: list[PolicyEvaluation],
+    cvar_level: float = 0.95,
+    completion_tolerance_fraction: float = 1.0e-6,
+) -> pd.DataFrame:
     """Summarize execution-cost distributions and constraint behavior."""
 
     rows: list[dict[str, float | str]] = []
@@ -71,6 +112,13 @@ def summarize_results(evaluations: list[PolicyEvaluation], cvar_level: float = 0
             [episode.history["forced_terminal_liquidation"].sum() for episode in evaluation.episodes],
             dtype=float,
         )
+        parent_order = infer_parent_order(evaluation.episodes[0]) if evaluation.episodes else 0.0
+        constraint_metrics = constraint_summary_metrics(
+            terminal_inventory,
+            participation_violations,
+            forced_terminal_liquidation,
+            parent_order,
+        )
         rows.append(
             {
                 "policy": evaluation.policy_name,
@@ -79,10 +127,12 @@ def summarize_results(evaluations: list[PolicyEvaluation], cvar_level: float = 0
                 f"cvar_{int(cvar_level * 100)}_bps": cvar(losses, cvar_level),
                 "p99_shortfall_bps": float(np.quantile(losses, 0.99)),
                 "worst_shortfall_bps": float(losses.max()),
-                "completion_rate": float(np.mean(np.isclose(terminal_inventory, 0.0, atol=1e-6))),
-                "avg_terminal_inventory": float(terminal_inventory.mean()),
-                "avg_participation_violation_shares": float(participation_violations.mean()),
-                "forced_terminal_liquidation_shares": float(forced_terminal_liquidation.mean()),
+                "completion_rate": completion_rate(
+                    terminal_inventory,
+                    parent_order,
+                    completion_tolerance_fraction,
+                ),
+                **constraint_metrics,
             }
         )
     return pd.DataFrame(rows).sort_values("mean_shortfall_bps").reset_index(drop=True)

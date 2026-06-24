@@ -14,6 +14,7 @@ from neural_optimal_execution.evaluation.metrics import evaluate_policy, summari
 from neural_optimal_execution.evaluation.plots import plot_average_inventory, plot_cost_distributions
 from neural_optimal_execution.policies import (
     AlmgrenChrissPolicy,
+    ConstantParticipationPolicy,
     RecalibratedAlmgrenChrissPolicy,
     TWAPPolicy,
     VWAPPolicy,
@@ -34,6 +35,7 @@ def main() -> None:
     policies = [
         TWAPPolicy(),
         VWAPPolicy(),
+        ConstantParticipationPolicy(),
         AlmgrenChrissPolicy(risk_aversion=ac_cfg.risk_aversion),
         RecalibratedAlmgrenChrissPolicy(risk_aversion=ac_cfg.risk_aversion),
     ]
@@ -41,7 +43,11 @@ def main() -> None:
     for policy in policies:
         print(f"Evaluating {policy.name}...")
         evaluations.append(evaluate_policy(policy, env_cfg, eval_cfg))
-    summary = summarize_results(evaluations, cvar_level=eval_cfg.cvar_level)
+    summary = summarize_results(
+        evaluations,
+        cvar_level=eval_cfg.cvar_level,
+        completion_tolerance_fraction=eval_cfg.completion_tolerance_fraction,
+    )
     table_path = output_dir / "tables" / "baseline_metrics.csv"
     table_path.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(table_path, index=False)

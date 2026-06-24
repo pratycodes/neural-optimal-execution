@@ -94,6 +94,96 @@ def test_terminal_liquidation_completes_even_if_policy_does_not_trade():
     assert result.history["forced_terminal_liquidation"][:-1].sum() == 0.0
 
 
+def set_deterministic_volume_path(env, volume):
+    cfg = env.config
+    volume = np.asarray(volume, dtype=np.float64)
+    env.market_path = MarketPath(
+        expected_volume=volume.copy(),
+        volume=volume.copy(),
+        volatility=np.zeros(cfg.n_steps),
+        temp_impact=np.zeros(cfg.n_steps),
+        returns=np.zeros(cfg.n_steps),
+        transient_noise=np.zeros(cfg.n_steps),
+        regimes=np.zeros(cfg.n_steps, dtype=np.int64),
+    )
+
+
+def test_strict_mode_never_reports_forced_terminal_liquidation():
+    cfg = ExecutionConfig(
+        parent_order=1000.0,
+        n_steps=2,
+        base_daily_volume=1000.0,
+        participation_rate=0.10,
+        terminal_liquidation=False,
+        clip_actions=True,
+    )
+    env = ExecutionEnv(cfg)
+    env.reset(seed=123)
+    set_deterministic_volume_path(env, [500.0, 500.0])
+    state = env.observe()
+    policy = OverTradePolicy()
+    policy.reset(env)
+    done = False
+    while not done:
+        state, done, _info = env.step(policy.act(state, env))
+    result = env.result()
+
+    assert result.history["forced_terminal_liquidation"].sum() == 0.0
+    assert result.history["participation_violation"].sum() == 0.0
+
+
+def test_strict_mode_can_leave_nonzero_terminal_inventory_when_infeasible():
+    cfg = ExecutionConfig(
+        parent_order=1000.0,
+        n_steps=2,
+        base_daily_volume=1000.0,
+        participation_rate=0.10,
+        terminal_liquidation=False,
+        clip_actions=True,
+    )
+    env = ExecutionEnv(cfg)
+    env.reset(seed=123)
+    set_deterministic_volume_path(env, [500.0, 500.0])
+    state = env.observe()
+    policy = OverTradePolicy()
+    policy.reset(env)
+    done = False
+    while not done:
+        state, done, _info = env.step(policy.act(state, env))
+    result = env.result()
+
+    assert result.terminal_inventory == 900.0
+    assert result.history["trade_size"].sum() == 100.0
+    assert result.history["forced_terminal_liquidation"].sum() == 0.0
+    assert result.history["participation_violation"].sum() == 0.0
+
+
+def test_feasible_strict_mode_can_complete_without_participation_violations():
+    cfg = ExecutionConfig(
+        parent_order=100.0,
+        n_steps=2,
+        base_daily_volume=1000.0,
+        participation_rate=0.10,
+        terminal_liquidation=False,
+        clip_actions=True,
+    )
+    env = ExecutionEnv(cfg)
+    env.reset(seed=123)
+    set_deterministic_volume_path(env, [500.0, 500.0])
+    state = env.observe()
+    policy = OverTradePolicy()
+    policy.reset(env)
+    done = False
+    while not done:
+        state, done, _info = env.step(policy.act(state, env))
+    result = env.result()
+
+    assert result.terminal_inventory == 0.0
+    assert result.history["trade_size"].sum() == cfg.parent_order
+    assert result.history["forced_terminal_liquidation"].sum() == 0.0
+    assert result.history["participation_violation"].sum() == 0.0
+
+
 def test_zero_drift_zero_impact_has_zero_implementation_shortfall():
     result = run_twap_on_deterministic_path(returns=[0.0, 0.0, 0.0, 0.0], temp_impact=0.0)
 

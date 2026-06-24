@@ -17,6 +17,18 @@ from neural_optimal_execution.config import ExecutionConfig
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 
+REGIME_TRANSITION_MATRIX = np.array(
+    [
+        [0.90, 0.07, 0.03],
+        [0.15, 0.80, 0.05],
+        [0.25, 0.05, 0.70],
+    ],
+    dtype=float,
+)
+REGIME_VOLUME_MULTIPLIERS = np.array([1.00, 1.60, 0.45], dtype=float)
+REGIME_VOLATILITY_MULTIPLIERS = np.array([1.00, 1.25, 1.90], dtype=float)
+REGIME_IMPACT_MULTIPLIERS = np.array([1.00, 0.70, 2.25], dtype=float)
+
 
 @dataclass(slots=True)
 class MarketPath:
@@ -48,19 +60,6 @@ def u_shaped_curve(n_steps: int, strength: float = 1.5) -> FloatArray:
 class MarketSimulator:
     """Generate stochastic liquidity and volatility paths."""
 
-    # Regime 0: normal, 1: high liquidity/event, 2: stressed liquidity.
-    _transition_matrix = np.array(
-        [
-            [0.90, 0.07, 0.03],
-            [0.15, 0.80, 0.05],
-            [0.25, 0.05, 0.70],
-        ],
-        dtype=float,
-    )
-    _volume_mult = np.array([1.00, 1.60, 0.45], dtype=float)
-    _volatility_mult = np.array([1.00, 1.25, 1.90], dtype=float)
-    _impact_mult = np.array([1.00, 0.70, 2.25], dtype=float)
-
     def __init__(self, config: ExecutionConfig):
         self.config = config
         self.expected_volume_curve = _profile_curve(
@@ -86,19 +85,19 @@ class MarketSimulator:
         regimes = self._sample_regimes(n_steps, rng)
 
         expected_volume = cfg.base_daily_volume * self.expected_volume_curve
-        volume = expected_volume * self._volume_mult[regimes]
+        volume = expected_volume * REGIME_VOLUME_MULTIPLIERS[regimes]
         volume *= rng.lognormal(mean=-0.5 * cfg.volume_noise**2, sigma=cfg.volume_noise, size=n_steps)
         volume = np.maximum(volume, 1.0)
 
         volatility = cfg.base_volatility * self.expected_volatility_curve / max(self.expected_volatility_curve.mean(), 1e-12)
-        volatility = volatility * self._volatility_mult[regimes]
+        volatility = volatility * REGIME_VOLATILITY_MULTIPLIERS[regimes]
         volatility *= rng.lognormal(
             mean=-0.5 * cfg.volatility_noise**2,
             sigma=cfg.volatility_noise,
             size=n_steps,
         )
 
-        temp_impact = cfg.temp_impact * self._impact_mult[regimes]
+        temp_impact = cfg.temp_impact * REGIME_IMPACT_MULTIPLIERS[regimes]
         temp_impact *= rng.lognormal(mean=-0.5 * 0.15**2, sigma=0.15, size=n_steps)
 
         dt = cfg.horizon / cfg.n_steps
@@ -118,7 +117,7 @@ class MarketSimulator:
     def _sample_regimes(self, n_steps: int, rng: np.random.Generator) -> IntArray:
         regimes = np.zeros(n_steps, dtype=np.int64)
         for t in range(1, n_steps):
-            regimes[t] = rng.choice(3, p=self._transition_matrix[regimes[t - 1]])
+            regimes[t] = rng.choice(3, p=REGIME_TRANSITION_MATRIX[regimes[t - 1]])
         return regimes
 
 

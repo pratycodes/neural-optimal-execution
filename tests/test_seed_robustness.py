@@ -21,7 +21,7 @@ def test_seed_summary_uses_requested_metric_names():
     violations = np.array([0.0, 4.0])
     forced = np.array([0.0, 8.0])
 
-    row = module.summarize_seed("Policy", 0, losses, terminal_inventory, violations, forced)
+    row = module.summarize_seed("Policy", 0, losses, terminal_inventory, violations, forced, parent_order=20.0)
 
     assert row["mean_shortfall_bps"] == float(losses.mean())
     assert row["std_shortfall_bps"] == float(losses.std(ddof=1))
@@ -32,6 +32,9 @@ def test_seed_summary_uses_requested_metric_names():
     assert row["avg_terminal_inventory"] == 5.0
     assert row["avg_participation_violation_shares"] == 2.0
     assert row["forced_terminal_liquidation_shares"] == 4.0
+    assert row["terminal_inventory_fraction"] == 0.25
+    assert row["participation_violation_fraction_of_parent_order"] == 0.1
+    assert row["forced_terminal_liquidation_fraction"] == 0.2
 
 
 def test_seed_aggregate_includes_mean_and_std_for_every_metric():
@@ -51,6 +54,9 @@ def test_seed_aggregate_includes_mean_and_std_for_every_metric():
                 "avg_terminal_inventory": 0.0,
                 "avg_participation_violation_shares": 0.0,
                 "forced_terminal_liquidation_shares": 0.0,
+                "terminal_inventory_fraction": 0.0,
+                "forced_terminal_liquidation_fraction": 0.0,
+                "participation_violation_fraction_of_parent_order": 0.0,
             }
         )
 

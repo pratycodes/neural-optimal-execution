@@ -41,6 +41,7 @@ class EvaluationConfig:
     n_episodes: int = 250
     seed: int = 7
     cvar_level: float = 0.95
+    completion_tolerance_fraction: float = 1.0e-6
 
 
 @dataclass(slots=True)

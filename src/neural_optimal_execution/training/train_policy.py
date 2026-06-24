@@ -10,7 +10,13 @@ import torch
 from torch import optim
 
 from neural_optimal_execution.config import ExecutionConfig, TrainingConfig
-from neural_optimal_execution.environment.market_simulator import MarketSimulator
+from neural_optimal_execution.environment.market_simulator import (
+    MarketSimulator,
+    REGIME_IMPACT_MULTIPLIERS,
+    REGIME_TRANSITION_MATRIX,
+    REGIME_VOLATILITY_MULTIPLIERS,
+    REGIME_VOLUME_MULTIPLIERS,
+)
 from neural_optimal_execution.policies.neural_policy import MLPExecutionPolicy
 from neural_optimal_execution.training.losses import mean_variance_cvar_objective
 
@@ -33,13 +39,10 @@ def _make_torch_market_paths(
         device=device,
     ).expand(batch_size, n_steps)
 
-    # Independent regime sampling is sufficient for the training MVP. The numpy
-    # evaluation environment uses a Markov regime chain.
-    regime_probs = torch.tensor([0.75, 0.15, 0.10], dtype=torch.float32, device=device)
-    regimes = torch.multinomial(regime_probs, num_samples=batch_size * n_steps, replacement=True).reshape(batch_size, n_steps)
-    volume_mult = torch.tensor([1.00, 1.60, 0.45], dtype=torch.float32, device=device)[regimes]
-    volatility_mult = torch.tensor([1.00, 1.25, 1.90], dtype=torch.float32, device=device)[regimes]
-    impact_mult = torch.tensor([1.00, 0.70, 2.25], dtype=torch.float32, device=device)[regimes]
+    regimes = _sample_markov_regimes(batch_size, n_steps, device)
+    volume_mult = torch.tensor(REGIME_VOLUME_MULTIPLIERS, dtype=torch.float32, device=device)[regimes]
+    volatility_mult = torch.tensor(REGIME_VOLATILITY_MULTIPLIERS, dtype=torch.float32, device=device)[regimes]
+    impact_mult = torch.tensor(REGIME_IMPACT_MULTIPLIERS, dtype=torch.float32, device=device)[regimes]
 
     volume_noise = env_config.volume_noise
     volume = expected_volume * volume_mult
@@ -63,7 +66,21 @@ def _make_torch_market_paths(
         "temp_impact": temp_impact,
         "returns": returns,
         "transient_noise": transient_noise,
+        "regimes": regimes,
     }
+
+
+def _sample_markov_regimes(batch_size: int, n_steps: int, device: torch.device) -> torch.Tensor:
+    """Sample the same Markov liquidity-regime model used by numpy evaluation."""
+
+    if n_steps <= 0:
+        return torch.empty((batch_size, 0), dtype=torch.long, device=device)
+    transitions = torch.tensor(REGIME_TRANSITION_MATRIX, dtype=torch.float32, device=device)
+    regimes = torch.zeros((batch_size, n_steps), dtype=torch.long, device=device)
+    for t in range(1, n_steps):
+        probabilities = transitions[regimes[:, t - 1]]
+        regimes[:, t] = torch.multinomial(probabilities, num_samples=1).squeeze(1)
+    return regimes
 
 
 def simulate_batch(
@@ -109,11 +126,17 @@ def simulate_batch(
             dim=1,
         )
         fraction = policy(state)
-        desired_trade = max_trade * fraction
         if env_config.terminal_liquidation and t == n_steps - 1:
             trade_size = inventory
+        elif env_config.terminal_liquidation:
+            trade_size = max_trade * fraction
         else:
-            trade_size = desired_trade
+            future_expected_capacity = (
+                env_config.participation_rate * market["expected_volume"][:, t + 1 :].sum(dim=1)
+            )
+            minimum_trade = torch.clamp(inventory - future_expected_capacity, min=0.0)
+            minimum_trade = torch.minimum(minimum_trade, max_trade)
+            trade_size = minimum_trade + fraction * torch.clamp(max_trade - minimum_trade, min=0.0)
         execution_price = price - temp_impact_t * trade_size - transient
         cash = cash + trade_size * execution_price
         inventory = inventory - trade_size

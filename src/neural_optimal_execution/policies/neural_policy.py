@@ -75,4 +75,19 @@ class TrainedNeuralPolicy(BasePolicy):
         tensor_state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             fraction = float(self.model(tensor_state).item())
-        return fraction * env.max_trade_size()
+        max_trade = env.max_trade_size()
+        if env.config.terminal_liquidation:
+            return fraction * max_trade
+        minimum_trade = expected_completion_floor(env)
+        return minimum_trade + fraction * max(0.0, max_trade - minimum_trade)
+
+
+def expected_completion_floor(env: ExecutionEnv) -> float:
+    """Minimum current trade needed to finish against the expected future volume curve."""
+
+    if env.market_path is None:
+        raise RuntimeError("Environment has not been reset.")
+    future_expected_volume = float(env.market_path.expected_volume[env.step_index + 1 :].sum())
+    future_capacity = env.config.participation_rate * future_expected_volume
+    required_now = max(0.0, env.inventory - future_capacity)
+    return min(env.max_trade_size(), required_now)

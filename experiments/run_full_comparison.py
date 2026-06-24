@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,7 @@ from neural_optimal_execution.evaluation.outputs import display_path, make_run_o
 from neural_optimal_execution.evaluation.plots import plot_average_inventory, plot_cost_distributions
 from neural_optimal_execution.policies import (
     AlmgrenChrissPolicy,
+    ConstantParticipationPolicy,
     RecalibratedAlmgrenChrissPolicy,
     TWAPPolicy,
     TrainedNeuralPolicy,
@@ -31,12 +33,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", default=None, help="Optional run name under results/runs/<run-name>.")
     parser.add_argument("--retrain", action="store_true", help="Retrain the neural model before evaluation.")
     parser.add_argument("--allow-infeasible", action="store_true", help="Continue even if participation capacity is infeasible.")
+    parser.add_argument("--strict-constraints", action="store_true", help="Disable terminal-forced liquidation and enforce participation clipping.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     env_cfg, eval_cfg, train_cfg, ac_cfg = load_project_config(ROOT / args.config)
+    if args.strict_constraints:
+        env_cfg = replace(env_cfg, terminal_liquidation=False, clip_actions=True)
     if not ensure_participation_feasible(env_cfg, label=args.config, allow_infeasible=args.allow_infeasible):
         raise SystemExit(1)
     output_dirs = make_run_output_dirs(ROOT / args.output_dir, args.run_name)
@@ -45,6 +50,8 @@ def main() -> None:
     log_path = output_dirs.tables / "neural_training_log.csv"
     if args.run_name:
         print(f"Using run output directory: {display_path(output_dir, ROOT)}")
+    if args.strict_constraints:
+        print("Strict constraints enabled: terminal-forced liquidation is disabled.")
 
     if args.retrain or not model_path.exists():
         print("Training neural policy...")
@@ -58,6 +65,7 @@ def main() -> None:
     policies = [
         TWAPPolicy(),
         VWAPPolicy(),
+        ConstantParticipationPolicy(),
         AlmgrenChrissPolicy(risk_aversion=ac_cfg.risk_aversion),
         RecalibratedAlmgrenChrissPolicy(risk_aversion=ac_cfg.risk_aversion),
         TrainedNeuralPolicy.from_checkpoint(model_path),
@@ -67,7 +75,11 @@ def main() -> None:
         print(f"Evaluating {policy.name}...")
         evaluations.append(evaluate_policy(policy, env_cfg, eval_cfg))
 
-    summary = summarize_results(evaluations, cvar_level=eval_cfg.cvar_level)
+    summary = summarize_results(
+        evaluations,
+        cvar_level=eval_cfg.cvar_level,
+        completion_tolerance_fraction=eval_cfg.completion_tolerance_fraction,
+    )
     table_path = output_dirs.tables / "full_comparison_metrics.csv"
     summary.to_csv(table_path, index=False)
     plot_cost_distributions(evaluations, output_dirs.figures / "full_cost_distributions.png")

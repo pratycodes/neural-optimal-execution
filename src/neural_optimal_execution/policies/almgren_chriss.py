@@ -65,16 +65,12 @@ class AlmgrenChrissPolicy(BasePolicy):
         self.schedule: np.ndarray | None = None
 
     def reset(self, env: ExecutionEnv) -> None:
-        if env.market_path is None:
-            raise RuntimeError("Environment has not been reset.")
-        volatility = float(np.mean(env.market_path.volatility))
-        temp_impact = float(np.mean(env.market_path.temp_impact))
         self.schedule = compute_ac_schedule(
             inventory=env.config.parent_order,
             n_steps=env.config.n_steps,
             horizon=env.config.horizon,
-            volatility=volatility,
-            temporary_impact=temp_impact,
+            volatility=env.config.base_volatility,
+            temporary_impact=env.config.temp_impact,
             risk_aversion=self.risk_aversion,
         )
 

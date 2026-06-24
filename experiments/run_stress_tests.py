@@ -28,12 +28,13 @@ from neural_optimal_execution.config import EvaluationConfig, ExecutionConfig, l
 from neural_optimal_execution.environment import ExecutionEnv
 from neural_optimal_execution.environment.market_simulator import u_shaped_curve
 from neural_optimal_execution.evaluation.feasibility import ensure_participation_feasible
-from neural_optimal_execution.evaluation.metrics import cvar
+from neural_optimal_execution.evaluation.metrics import completion_rate, constraint_summary_metrics, cvar
 from neural_optimal_execution.evaluation.outputs import display_path, make_run_output_dirs
 from neural_optimal_execution.evaluation.stress_tests import liquidity_drought, slow_resilience, volatility_spike
 from neural_optimal_execution.policies import (
     AlmgrenChrissPolicy,
     BasePolicy,
+    ConstantParticipationPolicy,
     RecalibratedAlmgrenChrissPolicy,
     TWAPPolicy,
     TrainedNeuralPolicy,
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="results", help="Directory for result artifacts.")
     parser.add_argument("--run-name", default=None, help="Optional run name under results/runs/<run-name>.")
     parser.add_argument("--allow-infeasible", action="store_true", help="Continue even if participation capacity is infeasible.")
+    parser.add_argument("--strict-constraints", action="store_true", help="Disable terminal-forced liquidation and enforce participation clipping.")
     return parser.parse_args()
 
 
@@ -117,6 +119,7 @@ def build_policies(ac_risk_aversion: float, model_path: Path) -> list[BasePolicy
     policies: list[BasePolicy] = [
         TWAPPolicy(),
         VWAPPolicy(),
+        ConstantParticipationPolicy(),
         AlmgrenChrissPolicy(risk_aversion=ac_risk_aversion),
         RecalibratedAlmgrenChrissPolicy(risk_aversion=ac_risk_aversion),
     ]
@@ -134,10 +137,13 @@ def summarize_evaluation(
     terminal_inventory: np.ndarray,
     violations: np.ndarray,
     forced_terminal_liquidation: np.ndarray | None = None,
+    parent_order: float = 1.0,
+    completion_tolerance_fraction: float = 1.0e-6,
 ) -> dict[str, float | str]:
     """Build one stress-test metrics row."""
 
     forced = forced_terminal_liquidation if forced_terminal_liquidation is not None else np.zeros_like(violations)
+    constraint_metrics = constraint_summary_metrics(terminal_inventory, violations, forced, parent_order)
     return {
         "scenario": scenario,
         "policy": policy_name,
@@ -146,10 +152,12 @@ def summarize_evaluation(
         "cvar_95_bps": cvar(losses, 0.95),
         "p99_shortfall_bps": float(np.quantile(losses, 0.99)),
         "worst_shortfall_bps": float(losses.max()),
-        "completion_rate": float(np.mean(np.isclose(terminal_inventory, 0.0, atol=1e-6))),
-        "avg_terminal_inventory": float(terminal_inventory.mean()),
-        "avg_participation_violation_shares": float(violations.mean()),
-        "forced_terminal_liquidation_shares": float(forced.mean()),
+        "completion_rate": completion_rate(
+            terminal_inventory,
+            parent_order,
+            completion_tolerance_fraction,
+        ),
+        **constraint_metrics,
     }
 
 
@@ -182,6 +190,8 @@ def evaluate_policy_for_scenario(
         terminal_inventory,
         violations,
         forced_terminal_liquidation,
+        env_config.parent_order,
+        eval_config.completion_tolerance_fraction,
     )
 
 
@@ -293,6 +303,8 @@ Among classical policies, the lowest-CVaR policy by stress scenario is: {classic
 def main() -> None:
     args = parse_args()
     env_config, eval_config, _train_config, ac_config = load_project_config(resolve_path(args.config))
+    if args.strict_constraints:
+        env_config = replace(env_config, terminal_liquidation=False, clip_actions=True)
     scenario_configs = build_scenarios(env_config)
     all_feasible = True
     for scenario_name, scenario_config in scenario_configs.items():
@@ -311,6 +323,8 @@ def main() -> None:
     model_path = output_dirs.models / "neural_policy.pt"
     if args.run_name:
         print(f"Using run output directory: {display_path(output_dir, ROOT)}")
+    if args.strict_constraints:
+        print("Strict constraints enabled: terminal-forced liquidation is disabled.")
 
     if not model_path.exists():
         print(f"Skipping Neural Policy because no saved model exists at {display_path(model_path, ROOT)}.")
